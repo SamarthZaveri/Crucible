@@ -1,0 +1,9 @@
+data/runs/*.json
+data/search_cache/*.json
+data/training_history.json
+data/calibration.json
+data/ppo_checkpoints/
+__pycache__/
+*.pyc
+.env
+.venv

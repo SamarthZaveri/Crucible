@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Crucible Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --border:#2a2e37; --text:#e6e6e6; --muted:#8b93a1; --accent:#6ea8fe; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:20px 28px; border-bottom:1px solid var(--border); }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:4px 0 0; color:var(--muted); font-size:13px; }
+  .layout { display:grid; grid-template-columns: 340px 1fr; gap:0; min-height: calc(100vh - 73px); }
+  .sidebar { border-right:1px solid var(--border); padding:20px; overflow-y:auto; }
+  .main { padding:20px; overflow-y:auto; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
+  input[type=text] { width:100%; padding:9px 10px; border-radius:6px; border:1px solid var(--border); background:#0f1115; color:var(--text); }
+  button { padding:9px 14px; border-radius:6px; border:none; background:var(--accent); color:#0f1115; font-weight:600; cursor:pointer; margin-top:8px; }
+  button:hover { opacity:0.9; }
+  .run-item { padding:10px; border-radius:6px; cursor:pointer; border:1px solid transparent; }
+  .run-item:hover { border-color:var(--border); }
+  .run-item.active { border-color:var(--accent); background:#1c2230; }
+  .run-item .topic { font-size:13px; font-weight:600; }
+  .run-item .meta { font-size:11px; color:var(--muted); margin-top:2px; }
+  .score-pill { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; }
+  .score-good { background:#1e3a2a; color:#5fd583; }
+  .score-mid { background:#3a3320; color:#e0c15a; }
+  .score-bad { background:#3a2020; color:#e07a7a; }
+  h2 { font-size:16px; margin-top:0; }
+  h3 { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; }
+  pre { white-space:pre-wrap; font-family: inherit; font-size:13px; line-height:1.5; }
+  .revision { border-left:2px solid var(--border); padding-left:12px; margin-bottom:14px; }
+  .tabs { display:flex; gap:8px; margin-bottom:16px; }
+  .tab { padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; color:var(--muted); }
+  .tab.active { background:var(--panel); color:var(--text); border:1px solid var(--border); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Crucible</h1>
+  <p>Multi-agent research pipeline -- Planner &rarr; Executor &rarr; Critic &rarr; Judge, PPO-trained locally.</p>
+</header>
+<div class="layout">
+  <div class="sidebar">
+    <div class="card">
+      <h3>New run</h3>
+      <input type="text" id="topic-input" placeholder="Enter a research topic..." />
+      <button id="start-run-btn">Run</button>
+      <div id="start-status" style="font-size:12px; color:var(--muted); margin-top:6px;"></div>
+    </div>
+    <div class="card">
+      <h3>Runs</h3>
+      <div id="run-list"></div>
+    </div>
+  </div>
+  <div class="main">
+    <div class="tabs">
+      <div class="tab active" data-tab="run">Run Detail</div>
+      <div class="tab" data-tab="training">Training Progress</div>
+    </div>
+
+    <div id="tab-run">
+      <div class="card" id="run-detail">
+        <p style="color:var(--muted);">Select a run from the left to see its trace.</p>
+      </div>
+    </div>
+
+    <div id="tab-training" style="display:none;">
+      <div class="card">
+        <h2>Reward over PPO iterations</h2>
+        <canvas id="reward-chart" height="90"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = "http://localhost:8000";
+let currentRunId = null;
+let rewardChart = null;
+
+function scoreClass(s) {
+  if (s === null || s === undefined) return "";
+  if (s >= 7) return "score-good";
+  if (s >= 4) return "score-mid";
+  return "score-bad";
+}
+
+async function loadRuns() {
+  const res = await fetch(`${API_BASE}/runs`);
+  const runs = await res.json();
+  const list = document.getElementById("run-list");
+  list.innerHTML = "";
+  if (runs.length === 0) {
+    list.innerHTML = '<p style="color:var(--muted); font-size:13px;">No runs yet.</p>';
+    return;
+  }
+  runs.forEach(run => {
+    const el = document.createElement("div");
+    el.className = "run-item" + (run.run_id === currentRunId ? " active" : "");
+    el.innerHTML = `
+      <div class="topic">${run.topic}</div>
+      <div class="meta">
+        <span class="score-pill ${scoreClass(run.judge_overall)}">${run.judge_overall ?? "-"}/10</span>
+        &nbsp;${run.revisions} revision(s) &middot; ${run.duration_seconds ?? "?"}s
+      </div>`;
+    el.onclick = () => loadRunDetail(run.run_id);
+    list.appendChild(el);
+  });
+}
+
+async function loadRunDetail(runId) {
+  currentRunId = runId;
+  loadRuns();
+  const res = await fetch(`${API_BASE}/runs/${runId}`);
+  const run = await res.json();
+  const el = document.getElementById("run-detail");
+
+  let revisionsHtml = run.revisions.map((rev, i) => `
+    <div class="revision">
+      <h3>Revision ${i} -- critic score ${rev.critique.score ?? "-"}/10 (${rev.critique.approved ? "approved" : "sent back"})</h3>
+      <p style="font-size:12px; color:var(--muted);">${(rev.critique.issues || []).join(" &middot; ")}</p>
+      <details><summary style="cursor:pointer; font-size:12px; color:var(--accent);">Show draft text</summary><pre>${escapeHtml(rev.report)}</pre></details>
+    </div>
+  `).join("");
+
+  el.innerHTML = `
+    <h2>${run.topic}</h2>
+    <h3>Sub-questions</h3>
+    <ul>${run.sub_questions.map(q => `<li>${q}</li>`).join("")}</ul>
+
+    <h3>Revision trace</h3>
+    ${revisionsHtml || "<p style='color:var(--muted); font-size:13px;'>No revisions -- approved on first pass.</p>"}
+
+    <h3>Judge score</h3>
+    <p>
+      <span class="score-pill ${scoreClass(run.judge_score.overall)}">${run.judge_score.overall}/10 overall</span>
+      &nbsp;groundedness ${run.judge_score.groundedness} &middot; completeness ${run.judge_score.completeness} &middot; coherence ${run.judge_score.coherence}
+    </p>
+    <p style="font-size:12px; color:var(--muted);">${run.judge_score.rationale ?? ""}</p>
+
+    <h3>Final report</h3>
+    <pre>${escapeHtml(run.final_report)}</pre>
+  `;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.innerText = str || "";
+  return div.innerHTML;
+}
+
+async function loadTrainingHistory() {
+  const res = await fetch(`${API_BASE}/training/history`);
+  const history = await res.json();
+  const ctx = document.getElementById("reward-chart");
+  if (rewardChart) rewardChart.destroy();
+  rewardChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: history.map(h => h.iteration),
+      datasets: [{
+        label: "Mean reward (batch)",
+        data: history.map(h => h.mean_reward),
+        borderColor: "#6ea8fe",
+        backgroundColor: "rgba(110,168,254,0.1)",
+        tension: 0.25,
+        fill: true,
+      }],
+    },
+    options: {
+      scales: {
+        y: { min: 0, max: 1, ticks: { color: "#8b93a1" }, grid: { color: "#2a2e37" } },
+        x: { ticks: { color: "#8b93a1" }, grid: { color: "#2a2e37" } },
+      },
+      plugins: { legend: { labels: { color: "#e6e6e6" } } },
+    },
+  });
+}
+
+document.getElementById("start-run-btn").onclick = async () => {
+  const topic = document.getElementById("topic-input").value.trim();
+  if (!topic) return;
+  const status = document.getElementById("start-status");
+  status.textContent = "Starting run (this can take a few minutes locally)...";
+  await fetch(`${API_BASE}/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic }),
+  });
+  document.getElementById("topic-input").value = "";
+  status.textContent = "Run started -- refresh the run list in a bit.";
+  setTimeout(loadRuns, 3000);
+};
+
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    document.getElementById("tab-run").style.display = tab.dataset.tab === "run" ? "block" : "none";
+    document.getElementById("tab-training").style.display = tab.dataset.tab === "training" ? "block" : "none";
+    if (tab.dataset.tab === "training") loadTrainingHistory();
+  };
+});
+
+loadRuns();
+setInterval(loadRuns, 5000);
+</script>
+</body>
+</html>
