@@ -26,6 +26,13 @@ def search(query: str, max_results: int = 5, use_cache: bool = True) -> List[Dic
     Raises a clear error if TAVILY_API_KEY isn't set, rather than silently
     returning an empty list that would look like "no sources found" downstream.
     """
+    if not isinstance(query, str):
+        raise TypeError(
+            f"search() expected a string query, got {type(query).__name__}: {query!r}. "
+            f"This usually means an upstream agent (e.g. the Planner) returned a "
+            f"malformed sub-question that wasn't caught before reaching search()."
+        )
+
     cache_file = _cache_path(query)
     if use_cache and cache_file.exists():
         return json.loads(cache_file.read_text())["results"]

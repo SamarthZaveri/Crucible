@@ -49,4 +49,7 @@ def score(topic: str, sub_questions: List[str], report: str, sources: List[Dict]
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_msg},
     ]
-    return chat_json(model, messages, temperature=0.1)
+    return chat_json(
+        model, messages, temperature=0.1,
+        required_keys=["groundedness", "completeness", "coherence", "overall"],
+    )

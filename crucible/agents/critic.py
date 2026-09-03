@@ -47,4 +47,7 @@ def review(topic: str, sub_questions: List[str], report: str, sources: List[Dict
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_msg},
     ]
-    return chat_json(model, messages, temperature=0.2)
+    return chat_json(
+        model, messages, temperature=0.2,
+        required_keys=["approved", "score", "issues", "feedback"],
+    )

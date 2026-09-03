@@ -24,6 +24,11 @@ a brief conclusion.
 REVISE_SYSTEM_PROMPT = """You are revising a research report based on critic \
 feedback. Keep everything that was already well-grounded; fix only what the \
 critic flagged. Preserve the citation format ([1], [2], ...) and the Sources list.
+
+Do NOT narrow, refocus, or drift away from the original topic and sub-questions \
+-- the revised report must still address every one of the original sub-questions \
+listed below, even ones the previous draft under-covered. Do not regenerate the \
+report from scratch around a different angle; edit the existing structure.
 """
 
 
@@ -66,11 +71,20 @@ def draft(topic: str, sub_questions: List[str], model: str = None) -> Dict:
     return {"report": report_text, "sources": sources}
 
 
-def revise(topic: str, previous_report: str, critique: str, sources: List[Dict], model: str = None) -> str:
+def revise(
+    topic: str,
+    sub_questions: List[str],
+    previous_report: str,
+    critique: str,
+    sources: List[Dict],
+    model: str = None,
+) -> str:
     model = model or config.EXECUTOR_MODEL
     sources_block = _format_sources_block(sources)
     user_msg = (
         f"Topic: {topic}\n\n"
+        f"Original sub-questions (must all still be addressed):\n"
+        + "\n".join(f"- {q}" for q in sub_questions) + "\n\n"
         f"Previous report:\n{previous_report}\n\n"
         f"Critic feedback to address:\n{critique}\n\n"
         f"Numbered sources (unchanged):\n{sources_block}"

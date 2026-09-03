@@ -30,20 +30,38 @@ def run_topic(topic: str) -> Dict:
 
     revision_count = 0
     approved = False
+    best_report = report
+    best_score = -1.0
+
     while revision_count < config.MAX_CRITIC_REVISIONS:
         review = critic.review(topic, sub_questions, report, sources)
         trace["revisions"].append({"revision": revision_count, "report": report, "critique": review})
 
-        if review.get("approved") or review.get("score", 0) >= config.CRITIC_APPROVE_THRESHOLD:
+        score = review.get("score", 0) or 0
+        if score > best_score:
+            best_score = score
+            best_report = report
+
+        if review.get("approved") or score >= config.CRITIC_APPROVE_THRESHOLD:
             approved = True
             break
 
-        report = executor.revise(topic, report, review.get("feedback", ""), sources)
+        # If this was the last allowed revision, stop here rather than
+        # calling revise() again -- a report the Critic never gets to see
+        # should never become the final output. Fall back to the
+        # best-reviewed version below instead.
+        if revision_count == config.MAX_CRITIC_REVISIONS - 1:
+            break
+
+        report = executor.revise(topic, sub_questions, report, review.get("feedback", ""), sources)
         revision_count += 1
 
     if not approved:
-        # Loop exhausted without approval -- still proceed to judging, but flag it
-        # rather than silently presenting an unapproved report as if it passed.
+        # Loop exhausted without approval -- use the highest-scoring reviewed
+        # version rather than whatever the last revision happened to produce.
+        # (Revisions aren't guaranteed to be monotonic improvements -- see
+        # README note on this -- so "best seen" beats "most recent".)
+        report = best_report
         trace["max_revisions_hit"] = True
 
     final_score = judge.score(topic, sub_questions, report, sources)
